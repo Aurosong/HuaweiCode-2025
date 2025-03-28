@@ -1,3 +1,3 @@
 #!/bin/bash
 
-./code_craft < data/sample.in
+./src/code_craft < data/sample2.in

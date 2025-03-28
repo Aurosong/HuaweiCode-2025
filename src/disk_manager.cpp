@@ -14,6 +14,7 @@ Disk::Disk(int len, int _token) : length(len), size(0), isRead(false), prev_toke
         }
         node -> next = curr; // 形成循环
     }
+    head = curr;
 }
 
 // Disk::~Disk() {
@@ -29,12 +30,23 @@ Disk::Disk(int len, int _token) : length(len), size(0), isRead(false), prev_toke
 // }
 
 void Disk::to_string() {
-    Block *finder = curr;
+    std::cout << "Disk length: " << length << ", size: " << size << ", isRead: " << isRead << ", prev token: " << prev_token << std::endl;
+    Block *finder = head;
+    ObjBlock empty_block(-1, -1, -1, -1);
+    int dist = 0;
     do {
-        finder -> to_string();
-        std::cout << " | ";
+        if(finder == curr) {
+            std::cout << " -- curr --> ";
+        }
+        if(finder->data != empty_block) {
+            finder -> to_string();
+            std::cout << " dist: " << dist << " | ";
+        }
+        // finder -> to_string();
+        // std::cout << " | ";
         finder = finder -> next;
-    } while (finder != curr);
+        dist += 1;
+    } while (finder != head);
     std::cout << std::endl << std::endl << std::endl;
 }
 
@@ -79,15 +91,28 @@ void Disk::insert(ObjBlock& value) {
         return;
     }
     ObjBlock empty_block(-1, -1, -1, -1);
-    Block* finder = curr;
-    if (finder -> data == empty_block) {
-        finder -> data = value;
-    } else {
-        while (finder -> next -> data != empty_block) {
-            finder = finder -> next;
-        }
-        finder -> next -> data = value;
+    Block* finder = head;
+    int dist = 0;
+
+    while(finder->data != empty_block) {
+        finder = finder->next;
+        dist += 1;
     }
+
+    finder->data = value;
+    std::cout << dist + 1 << " ";
+
+    // if (finder -> data == empty_block) {
+    //     finder -> data = value;
+    //     std::cout << dist + 1 << " ";
+    // } else {
+    //     while (finder -> next -> data != empty_block) {
+    //         finder = finder -> next;
+    //         dist += 1;
+    //     }
+    //     finder -> next -> data = value;
+    //     std::cout << dist + 1 << " ";
+    // }
     size += 1;
     finder = nullptr;
 }
@@ -135,40 +160,57 @@ TokenReturn Disk::token_read(SimpleRead& task) {
         } else {
             prev_token = 64;
         }
+        token = prev_token;
         isRead = true;
         temp = temp->next;
         steps = 1;
         action = Read;
     } else {
         // 如果距离大于G，且token够用，jump，反之，暂时抛弃这个read，进行下一个
+        prev_token = -1;
+        isRead = false;
         if(task.dist >= max_token) {
-            if(token >= max_token) {
-                // jump
-                for(int i = task.dist; i > 0; i--) {
-                    temp = temp->next;
-                    isRead = false;
-                    prev_token = max_token;
-                }
-                steps = task.dist;
-                action = Jump;
-            } else {
-                // 暂时放弃这个read，降低优先级
-                // 优先级降低的幅度需要测试
-                task.priority -= 10;
-                prev_token = 0;
-                action = Abort;
+            // jump
+
+            // std::cout << std::endl << "开始执行jump！" << std::endl;
+            // std::cout << "当前block：";
+            // temp->to_string();
+            // std::cout << std::endl << "目标block：";
+            // task.block.to_string();
+            // std::cout << std::endl << "距离：" << task.dist << std::endl;
+
+
+            for(int i = task.dist; i > 0; i--) {
+                temp = temp->next;
             }
+            token = max_token;
+            steps = task.dist;
+            action = Jump;
+            // if(token == max_token) {
+            //     // jump
+            //     for(int i = task.dist; i > 0; i--) {
+            //         temp = temp->next;
+            //         isRead = false;
+            //         prev_token = max_token;
+            //     }
+            //     steps = task.dist;
+            //     action = Jump;
+            // } else {
+            //     // 暂时放弃这个read，降低优先级
+            //     // 优先级降低的幅度需要测试
+            //     task.priority -= 10;
+            //     prev_token = 0;
+            //     action = Abort;
+            // }
         } else {
             // 距离小于G，做一次pass
             temp = temp->next;
-            isRead = false;
-            prev_token = 1;
+            token = 1;
             steps = 1;
             action = Pass;
         }
     }
-    token += prev_token;
-    return TokenReturn(temp, steps, token, action);
+    return TokenReturn(temp, curr, task.read_id, steps, token, action);
 }
 
 bool Disk::isfull() {
@@ -177,6 +219,32 @@ bool Disk::isfull() {
 
 int Disk::spaceLeft() {
     return length - size;
+}
+
+int Disk::getLocation(Block* block) {
+    Block* temp = head;
+    int loc = 1;
+    while(temp != block) {
+        temp = temp->next;
+        loc += 1;
+    }
+    return loc;
+}
+
+int Disk::avgDist() {
+    ObjBlock empty_block(-1, -1, -1, -1);
+    int distsum = 0;
+    int dist = 0;
+    Block *finder = curr;
+
+    while(finder -> next != curr) {
+        if(finder -> data != empty_block) {
+            distsum += dist;
+        }
+        dist += 1;
+        finder = finder -> next;
+    }
+    return distsum;
 }
 
 StorageManager::StorageManager(int disk_count, int block_count, int total_token) {
@@ -188,16 +256,25 @@ StorageManager::StorageManager(int disk_count, int block_count, int total_token)
 }
 
 void StorageManager::insert(Object& value) {
+    if(value.id > 0) {
+        std::cout << value.id << std::endl;
+    } else {
+        std::cerr << "Not a valid object id!" << std::endl;
+    }
+
     int split = value.size;
     uint16_t value_bitmap = 0;
     std::vector<int> in_disk = chooseDisk(3, value.size);
 
+    // std::cout << "insert obj id: " << value.id << std::endl;
     for(int i = 0; i < 3; i++) {
+        std::cout << in_disk.at(i) + 1 << " ";
         for(int ii = 0; ii < split; ii++) {
             ObjBlock obj_block(value.id, value.size, ii, value.tag);
             disks.at(in_disk.at(i)).insert(obj_block);
         }
         value_bitmap = 1 << in_disk.at(i) | value_bitmap;
+        std::cout << std::endl;
     }
     obj_bitmap.emplace(value.id, value_bitmap);
 }
@@ -252,6 +329,18 @@ void StorageManager::map_to_string(int obj_id) {
     std::cout << std::endl;
 }
 
+void StorageManager::map_to_string() {
+    for(auto pair : obj_bitmap) {
+        int obj_id = pair.first;
+        uint16_t local_bitmap = pair.second;
+        std::cout << "id: " << obj_id << ", bitmap: ";
+        for(int i = 15; i >=0; --i) {
+            std::cout << ((local_bitmap >> i) & 1);
+        }
+        std::cout << std::endl;
+    }
+}
+
 void StorageManager::to_string() {
     // map_to_string();
     for(int i = 0; i < disks.size(); i++) {
@@ -262,15 +351,35 @@ void StorageManager::to_string() {
     }
 }
 
-std::vector<int> StorageManager::chooseDisk(int num, int part) {
+std::vector<int> StorageManager::chooseDisk(int num, int part) { // num = 3
     std::vector<int> result;
     result.reserve(num);
+
+    // 选择策略：按顺序选择三个有空位的disk
+    // for(int i = 0; i < disks.size(); i++) {
+    //     if(!disks.at(i).isfull() && disks.at(i).spaceLeft() >= part) {
+    //         result.push_back(i);
+    //     }
+    //     if(result.size() == num) break;
+    // }
+
+    // 选择策略：选择元素最少的三个disk
     for(int i = 0; i < disks.size(); i++) {
-        if(!disks.at(i).isfull() && disks.at(i).spaceLeft() >= part) {
+        if(result.size() < 3) {
             result.push_back(i);
+        } else {
+            int curr_max_index = 0;
+            for(int j = 0; j < 3; j++) {
+                if(disks.at(result.at(j)).size > disks.at(curr_max_index).size) {
+                    curr_max_index = j;
+                }
+            }
+            if(disks.at(i).size < disks.at(curr_max_index).size) {
+                result.at(curr_max_index) = i;
+            }
         }
-        if(result.size() == num) break;
     }
+
     return result;
 }
 

@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(src)
 
-set(SOURCES src/main.cpp src/disk_manager.cpp src/schema_manager.cpp)
+set(SOURCES main.cpp disk_manager.cpp schema_manager.cpp)
 
 add_executable(code_craft ${SOURCES})
 

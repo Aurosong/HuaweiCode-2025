@@ -10,6 +10,14 @@ Schema::Schema() : sManager(0, 0, 0) {
     token = TOKEN_COUNT;
     timestamp = TIME_STAMP_COUNT;
 
+    write_time = 0;
+    delete_time = 0;
+    read_time = 0;
+    simple_time = 0;
+    token_time = 0;
+    dist_update_time = 0;
+    block_update_time = 0;
+
     for(int i = 0; i < TAG_COUNT; i++) {
         int tag = i + 1;
         std::vector<int> delete_timestamps;
@@ -44,6 +52,11 @@ Schema::Schema() : sManager(0, 0, 0) {
             read_timestamps.push_back(read_sum_in_timestamp);
         }
         read_counter.emplace(tag, read_timestamps);
+    }
+
+    for(int i = 0; i < DISK_COUNT; i++) {
+        ReadQueue empty_queue;
+        read_time_waitList.emplace(i, empty_queue);
     }
 
     std::cout << "OK" << std::endl;
@@ -105,35 +118,55 @@ void Schema::handle_timeStamp(int stamp) {
         std::cout << "TIMESTAMP " << stamp << std::endl;
     }
 
-    handle_delete(stamp);
-    handle_write(stamp);
-    // handle_simple_read(stamp);
+    TimerClock tc;
 
-    sManager.to_string();
+    handle_delete(stamp);
+
+    delete_time += tc.second();
+    tc.tick();
+
+    std::cout.flush();
+    handle_write(stamp);
+
+    write_time += tc.second();
+    tc.tick();
+
+    // handle_simple_read(stamp);
+    std::cout.flush();
 
     handle_token_read(stamp);
 
-    sManager.to_string();
+    read_time += tc.second();
 
-    std::cout << "================================================================" << std::endl;
-    std::cout << "================================================================" << std::endl;
+    std::cout.flush();
+
+    // sManager.to_string();
+
+    // std::cout << "================================================================" << std::endl;
+    // std::cout << "================================================================" << std::endl;
 }
 
 void Schema::handle_delete(int stamp) {
     int operation_count;
     std::cin >> operation_count;
-
+    
+    std::set<int> cancle_read_id;
     for(int i = 0; i < operation_count; i++) {
         int delete_id;
         std::cin >> delete_id;
         sManager.remove(delete_id);
-        waitList_update_delete(delete_id);
+        waitList_delete_update(delete_id, cancle_read_id);
+    }
+    std::cout << cancle_read_id.size() << std::endl;
+    for(auto readId : cancle_read_id) {
+        std::cout << readId << std::endl;
     }
 }
 
 void Schema::handle_write(int stamp) {
     int operation_count;
     std::cin >> operation_count;
+    
     for(int i = 0; i < operation_count; i++) {
         int obj_id, obj_size, obj_tag;
         std::cin >> obj_id >> obj_size >> obj_tag;
@@ -143,72 +176,117 @@ void Schema::handle_write(int stamp) {
 }
 
 void Schema::handle_token_read(int stamp) {
+    report_list.clear();
     int operation_count;
     std::cin >> operation_count;
+
+    TimerClock tc;
 
     // 存储当前时间片内输入的查询
     for(int i = 0; i < operation_count; i++) {
         int read_id, read_obj_id;
         std::cin >> read_id >> read_obj_id;
+
+        tc.tick();
         sManager.simple_read(read_id, stamp, read_obj_id, read_time_waitList);
+        simple_time += tc.second();
+
+        std::vector<ObjBlock> empty_blocks;
+        read_finish_container.emplace(read_id, empty_blocks);
     }
 
-    waitList_to_string(stamp);
+    // if(stamp == 435) {
+    //     waitList_to_string(stamp);
+    // }
 
-    std::vector<int> token_counter(DISK_COUNT, TOKEN_COUNT); // token计数器，下表为disk ID，value为剩余的token
+    // 处理当前时间片时剩下的查询
+    std::vector<int> token_counter(DISK_COUNT, TOKEN_COUNT); // token计数器，下标为disk ID，value为剩余的token
     for(auto disk : read_time_waitList) {
         int disk_id = disk.first;
+        bool isJump = false;
         while(token_counter.at(disk_id) > 0 && !read_time_waitList.at(disk_id).empty()) {
             TokenReturn token_return;
             SimpleRead read_task = read_time_waitList.at(disk_id).top();
+
+            // sManager返回一个token read方案（token_return），由Schema决定该方案能否被提交
+
+            tc.tick();
             token_return = sManager.disks.at(disk_id).token_read(read_task);
-            // token_return.to_string();
+            token_time += tc.second();
             if(token_counter.at(disk_id) >= token_return.tokens) {
                 // 能够完成任务，提交所有修改
                 token_counter.at(disk_id) -= token_return.tokens;
                 sManager.disks.at(disk_id).curr = token_return.temp;
 
                 if(token_return.action == Read) {
+
+                    // std::cout << std::endl << ", Read Block: ";
+                    // token_return.curr->to_string();
+                    // std::cout << " ,dist: ";
+                    // std::cout << sManager.disks.at(disk_id).getLocation(token_return.curr);
+                    // std::cout << std::endl;
+
+                    sManager.disks.at(disk_id).isRead = true;
                     read_time_waitList.at(disk_id).pop();
+                    read_finish_container.at(token_return.read_id).push_back(token_return.curr->data);
+                    if(read_finish_container.at(token_return.read_id).size() == token_return.curr->data.total_size) {
+                        checkFinish(token_return.read_id);
+                    }
+
+                    // sManager.to_string();
+                    // token_return.to_string();
+                    tc.tick();
+                    waitList_block_update(token_return.read_id, token_return.curr->data);
+                    block_update_time += tc.second();
+
+                    // finishList_to_string(stamp);
                 }
-                waitList_update(token_return.steps, disk_id);
 
-                // waitList_to_string(stamp);
+                tc.tick();
+                waitList_dist_update(token_return.steps, disk_id);
+                dist_update_time += tc.second();
 
-                std::cout << "Disk " << disk_id << " 的Read " << read_task.read_id << " 执行了 ";
-                token_return.action_to_string();
-                std::cout << ", 消耗Token: " << token_return.tokens;
-                std::cout << ", 指针移动: " << token_return.steps;
-                std::cout << ", 剩余token: " << token_counter.at(disk_id) << std::endl;
+                if(token_return.action == Jump) {
+                    int jump_location = sManager.disks.at(disk_id).getLocation(token_return.temp);
+                    std::cout << "j " << jump_location << std::endl;
+                    isJump = true;
+                    continue;
+                } else {
+                    switch (token_return.action) {
+                        case Pass: std::cout << "p";
+                                   break;
+                        case Read: std::cout << "r";
+                                   break;
+                        default: std::cout << "error";
+                    }
+                }
             } else {
                 // token不够完成当前任务
                 token_counter.at(disk_id) = 0;
-                std::cout << "token不够执行下一个任务！" << std::endl;
+                sManager.disks.at(disk_id).isRead = false;
+                // std::cout << "token不够执行下一个任务！" << std::endl;
             }
-            waitList_to_string(stamp);
+            // waitList_to_string(stamp);
         }
+        if(!isJump) {
+            std::cout << "#" << std::endl;
+        }
+    }
+
+    std::cout << report_list.size() << std::endl;
+    for(auto report : report_list) {
+        std::cout << report << std::endl;
     }
 }
 
-void Schema::handle_simple_read(int stamp) {
-    // int operation_count;
-    // std::cin >> operation_count;
-    // // 存储当前时间片内输入的查询
-    // for(int i = 0; i < operation_count; i++) {
-    //     int read_id, read_obj_id;
-    //     std::cin >> read_id >> read_obj_id;
-    //     std::vector<SimpleRead> simple_read_result;
-    //     sManager.simple_read(read_id, stamp, read_obj_id, simple_read_result);
-    
-    //     waitList_to_string(stamp);
-    //     std::cout << std::endl << std::endl;
-    // }
-}
-
-void Schema::waitList_update(int dist, int disk_id) {
-    // std::vector<SimpleRead> temp;
+/*
+在disk操作之后，磁头位置变化，waitlist中所有相对距离都会变动
+此函数用来更新waitlist中的距离，让其根据磁头变动适当改变
+*/
+void Schema::waitList_dist_update(int dist, int disk_id) {
     ReadQueue disk_queue = read_time_waitList.at(disk_id);
     ReadQueue temp;
+
     dist = dist % BLOCK_COUNT;
     while(!disk_queue.empty()) {
         SimpleRead simple_read = disk_queue.top();
@@ -225,7 +303,12 @@ void Schema::waitList_update(int dist, int disk_id) {
     read_time_waitList.at(disk_id) = temp;
 }
 
-void Schema::waitList_update_delete(int id) {
+/*
+当有未读完的项目被delete时，该read被取消
+此函数用来删除并汇报这些被取消的read
+*/
+void Schema::waitList_delete_update(int id, std::set<int>& cancle_read_id) {
+    int cancle_count = 0;
     for(auto pair : read_time_waitList) {
         int disk_id = pair.first;
         ReadQueue readQueue = pair.second;
@@ -235,9 +318,97 @@ void Schema::waitList_update_delete(int id) {
             readQueue.pop();
             if(simple_read.block.objId != id) {
                 temp.emplace(simple_read);
+            } else {
+                cancle_read_id.emplace(simple_read.read_id);
             }
         }
         read_time_waitList.at(disk_id) = temp;
+    }
+}
+
+/*
+当一个block被某个disk完成了读时，其他disk的waitlist中可能还有这个block的读任务
+此函数用来删除这些冗余的读任务
+*/
+void Schema::waitList_block_update(const int& read_id, ObjBlock& block) {
+    // std::cout << "Block msg: ";
+    // block.to_string();
+    // std::cout << std::endl;
+    // sManager.map_to_string();
+
+    int obj_id = block.objId;
+    uint16_t disk_bitmap = sManager.obj_bitmap.at(obj_id);
+
+    for(int i = 0; i < 10; i++) {
+        if(disk_bitmap & 1 == 1) {
+            ReadQueue readQueue = read_time_waitList.at(i);
+            ReadQueue temp;
+            while(!readQueue.empty()) {
+                SimpleRead simple_read = readQueue.top();
+                readQueue.pop();
+                if(simple_read.block != block || simple_read.read_id != read_id) {
+                    temp.emplace(simple_read);
+                }
+            }
+            read_time_waitList.at(i) = temp;
+        }
+        disk_bitmap = disk_bitmap >> 1;
+    }
+
+    // for(auto pair : read_time_waitList) {
+    //     int disk_id = pair.first;
+    //     ReadQueue readQueue = pair.second;
+    //     ReadQueue temp;
+    //     while(!readQueue.empty()) {
+    //         SimpleRead simple_read = readQueue.top();
+    //         readQueue.pop();
+    //         if(simple_read.block != block || simple_read.read_id != read_id) {
+    //             temp.emplace(simple_read);
+    //         }
+    //     }
+    //     read_time_waitList.at(disk_id) = temp;
+    // }
+}
+
+void Schema::waitList_finish_update(const int& read_id) {
+    for(auto pair : read_time_waitList) {
+        int disk_id = pair.first;
+        ReadQueue readQueue = pair.second;
+        ReadQueue temp;
+        while(!readQueue.empty()) {
+            SimpleRead simple_read = readQueue.top();
+            readQueue.pop();
+            if(simple_read.read_id != read_id) {
+                temp.emplace(simple_read);
+            }
+        }
+        read_time_waitList.at(disk_id) = temp;
+    }
+}
+
+void Schema::checkFinish(const int& read_id) {
+    std::vector<ObjBlock> list = read_finish_container.at(read_id);
+    if(list.empty()) {
+        std::cerr << "Error for a empty finish list!" << std::endl;
+        return;
+    }
+    int objId = list.at(0).objId;
+    int size = list.at(0).total_size;
+    std::set<int> checker;
+    for(int i = 0; i < size; i++) {
+        checker.emplace(i);
+    }
+    for(auto obj_block : list) {
+        checker.erase(obj_block.part);
+    }
+    if(checker.empty()) {
+        // std::cout << "Read " << read_id << " 已完成所有读取！" << std::endl;
+        // waitList_finish_update(read_id);
+        report_list.push_back(read_id);
+        read_finish_container.erase(read_id);
+    } else {
+        std::cerr << "Error: Read" << read_id << " 验证未通过！" << std::endl;
+        return;
     }
 }
 
@@ -258,6 +429,17 @@ void Schema::waitList_remove(int stamp, int obj_id) {
     // for(auto& entry : temp) {
     //     read_time_waitList.push(entry);
     // }
+}
+
+void Schema::time_to_string() {
+    std::cout << std::endl << "运行时间总览：" << std::endl;
+    std::cout << "Delete Time: " << delete_time << std::endl;
+    std::cout << "Write Time: " << write_time << std::endl;
+    std::cout << "Total Read Time: " << read_time << std::endl;
+    std::cout << "Simple Read Time: " << simple_time << std::endl;
+    std::cout << "Token Read Time: " << token_time << std::endl;
+    std::cout << "Waitlist dist update Time: " << dist_update_time << std::endl;
+    std::cout << "Waitlist block update Time: " << block_update_time << std::endl;
 }
 
 void Schema::waitList_to_string(int stamp) {
@@ -283,5 +465,19 @@ void Schema::waitList_to_string(int stamp) {
     }
 }
 
+void Schema::finishList_to_string(int stamp) {
+    std::cout << "Finish container in timestamp " << stamp << std::endl;
+    for(auto read : read_finish_container) {
+        std::cout << "Read ID: " << read.first << ", finish blocks: ";
+        if(read.second.size() == 0) {
+            std::cout << "null "; 
+        } else {
+            for(auto objb : read.second) {
+                objb.to_string();
+            }
+        }
+        std::cout << std::endl;
+    }
+}
 
 #endif

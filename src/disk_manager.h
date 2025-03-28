@@ -21,24 +21,16 @@ enum Action {
     Abort
 };
 
-// void action_to_string(Action action) {
-//     switch (action) {
-//         case Jump: std::cout << "Jump";
-//         case Pass: std::cout << "Pass";
-//         case Read: std::cout << "Read";
-//         case Abort: std::cout << "Abort";
-//         default: std::cout << "UNKNOWN";
-//     }
-// }
-
 struct TokenReturn {
     Block* temp;
+    Block* curr;
+    int read_id;
     int steps;
     int tokens;
     Action action;
 
-    TokenReturn() : temp(nullptr), steps(0), tokens(0) {}
-    TokenReturn(Block* ptr, int step, int token, Action _action) : temp(ptr), steps(step), tokens(token), action(_action) {}
+    TokenReturn() : temp(nullptr), curr(nullptr), read_id(-1), steps(0), tokens(0) {}
+    TokenReturn(Block* ptr, Block* _curr, int id, int step, int token, Action _action) : temp(ptr), curr(_curr), read_id(id), steps(step), tokens(token), action(_action) {}
     void action_to_string() {
         switch (action) {
             case Jump: std::cout << "Jump";
@@ -53,10 +45,15 @@ struct TokenReturn {
         }
     }
     void to_string() {
-        std::cout << "执行计划: ";
+        std::cout << "Read " << read_id;
+        std::cout << " 执行计划: ";
         action_to_string();
         std::cout << ", 消耗token: " << tokens;
         std::cout << ", 移位: " << steps;
+        std::cout << ", 磁头之前的block: ";
+        curr->to_string();
+        std::cout << ", 磁头当前的block: ";
+        temp->to_string();
         std::cout << std::endl;
     }
 };
@@ -64,6 +61,7 @@ struct TokenReturn {
 class Disk {
 public:
     Block *curr;
+    Block *head;
     int length;
     int size;
     int max_token;
@@ -83,6 +81,8 @@ public:
     TokenReturn token_read(SimpleRead& task);
     bool isfull();
     int spaceLeft();
+    int getLocation(Block* block);
+    int avgDist();
 };
 
 class StorageManager {
@@ -97,7 +97,17 @@ public:
     void token_read();
     void to_string();
     void map_to_string(int obj_id);
+    void map_to_string();
     std::vector<int> chooseDisk(int num, int part);
 };
+
+
+struct diskdistCompare {
+    bool operator()(Disk& d1, Disk& d2) {
+        return d1.avgDist() > d2.avgDist();
+    }
+};
+
+using DiskQueue = std::priority_queue<Disk, std::vector<Disk>, diskdistCompare>;
 
 #endif

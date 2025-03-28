@@ -1,0 +1,3 @@
+/app/src/build/CMakeFiles/code_craft.dir
+/app/src/build/CMakeFiles/edit_cache.dir
+/app/src/build/CMakeFiles/rebuild_cache.dir

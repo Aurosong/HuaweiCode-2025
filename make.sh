@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BUILD_DIR="build"
+BUILD_DIR="src/build"
 if [ ! -d "$BUILD_DIR" ]; then
     mkdir -p $BUILD_DIR
     echo "Created build directory: $BUILD_DIR"

@@ -1,0 +1,1 @@
+python3 run.py interactor/linux/interactor data/sample2.in src/code_craft # -d 5037

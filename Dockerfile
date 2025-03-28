@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     && add-apt-repository ppa:ubuntu-toolchain-r/test -y \
     && apt-get update \
     && apt-get install -y \
+    python3 \
+    python3-pip \
     g++-7 \
     cmake \
     && apt-get clean \
